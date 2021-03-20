@@ -2,7 +2,6 @@
   "site_name": "EarthWind's Blog",
   "posts_path": "posts",
   "output_path": "public",
-  "profile_path": "profile",
   "article_format": "md",
   "default_author": "EarthWind",
   "web_master": "EarthWind"
