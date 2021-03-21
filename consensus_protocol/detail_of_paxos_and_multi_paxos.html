@@ -44,22 +44,22 @@
 </ul>
 <p>在Paxos中，包括了三类角色，分别是Proposer、Accepter和Learner，一个系统中他们都存在一个或则多个。需要被确定的值由Proposer提出，值被提出后发送给接收者Acceptor进行确定，确定成功后由学习者对值进行保存和应用。</p>
 <h4 id="2.3-确定一个值(单个accptor)"><a href="#2.3-%E7%A1%AE%E5%AE%9A%E4%B8%80%E4%B8%AA%E5%80%BC(%E5%8D%95%E4%B8%AAaccptor)">2.3 确定一个值(单个Accptor)</a></h4>
-<figure tabindex="1"><a href="evernotecid://F69FFB73-5A4B-441D-90A3-E7FF421602A3/appyinxiangcom/31284421/ENResource/p24"><img src="evernotecid://F69FFB73-5A4B-441D-90A3-E7FF421602A3/appyinxiangcom/31284421/ENResource/p24" alt=""></a><figcaption>2ebc0de90c7b4d78ea75a775d7f742f2.png</figcaption></figure>
+<figure tabindex="1"><a href="../images/consensus_protocol/p1.png"><img src="../images/consensus_protocol/p1.png" alt=""></a><figcaption>p1</figcaption></figure>
 <p>在只有单个Acceptor的系统中，对于多个Propser提出的多个值，Acceptor只要选择第一个到达的就能将值确定下来。相应的问题是单点Acceptor失效的情况下会使得系统不可用，所以需要引入多个Acceptor。</p>
 <h4 id="2.4-确定一个值(多个accptor)"><a href="#2.4-%E7%A1%AE%E5%AE%9A%E4%B8%80%E4%B8%AA%E5%80%BC(%E5%A4%9A%E4%B8%AAaccptor)">2.4 确定一个值(多个Accptor)</a></h4>
-<figure tabindex="2"><a href="evernotecid://F69FFB73-5A4B-441D-90A3-E7FF421602A3/appyinxiangcom/31284421/ENResource/p22"><img src="evernotecid://F69FFB73-5A4B-441D-90A3-E7FF421602A3/appyinxiangcom/31284421/ENResource/p22" alt=""></a><figcaption>3db593fa1aa51b86248a343c8eec4476.png</figcaption></figure>
+<figure tabindex="2"><a href="../images/consensus_protocol/p2.png"><img src="../images/consensus_protocol/p2.png" alt=""></a><figcaption>p2</figcaption></figure>
 <p>在具有多个Acceptor的系统中，Proposer可以将提出的值发送给多个Acceptor，只要被大多数（一半以上）Acceptor接受了，那么值就被确定了。为什么是大多数？任何两个由大多数Acceptor组成的集合必然存在交集，即公共的Acceptor，<strong>只要保证Acceptor只能接受(accept)一个值</strong>，那任何两个大多数集合确定的值就是一样的，如果不一样，则集合交集中至少存在一个Acceptor接受了两个值，和条件违背，所以只要<strong>大多数</strong>Acceptor接受了一个值，那值就确定了，并且系统能供容忍少于大多数的Acceptor出现故障。综上，得出的Paxos实现一致性的原始条件是：</p>
 <blockquote>
 <p>Acceptor只能接受一个值</p>
 </blockquote>
-<figure tabindex="3"><a href="evernotecid://F69FFB73-5A4B-441D-90A3-E7FF421602A3/appyinxiangcom/31284421/ENResource/p32"><img src="evernotecid://F69FFB73-5A4B-441D-90A3-E7FF421602A3/appyinxiangcom/31284421/ENResource/p32" alt=""></a><figcaption>4b7488135c719fba4e5490c73220fd76.png</figcaption></figure>
+<figure tabindex="3"><a href="../images/consensus_protocol/p3.png"><img src="../images/consensus_protocol/p3.png" alt=""></a><figcaption>p3</figcaption></figure>
 <p>如果一个Acceptor能够接受多个值，那如上图所示，提出的两个值都被大多数的Acceptor接受了，那就确定出了两个值而不是一个值，与条件违背；</p>
-<figure tabindex="4"><a href="evernotecid://F69FFB73-5A4B-441D-90A3-E7FF421602A3/appyinxiangcom/31284421/ENResource/p33"><img src="evernotecid://F69FFB73-5A4B-441D-90A3-E7FF421602A3/appyinxiangcom/31284421/ENResource/p33" alt=""></a><figcaption>93bf83fd8189f92a0412aa721a67b098.png</figcaption></figure>
+<figure tabindex="4"><a href="../images/consensus_protocol/p4.png"><img src="../images/consensus_protocol/p4.png" alt=""></a><figcaption>p4</figcaption></figure>
 <p>如果一个Acceptor只能接受一个值，那就能保证在一个值被大多数Acceptor接受后就不会出现另一个值再被接受。</p>
 <blockquote>
 <p>P1.Acceptor必须接受收到的第一个值</p>
 </blockquote>
-<figure tabindex="5"><a href="evernotecid://F69FFB73-5A4B-441D-90A3-E7FF421602A3/appyinxiangcom/31284421/ENResource/p35"><img src="evernotecid://F69FFB73-5A4B-441D-90A3-E7FF421602A3/appyinxiangcom/31284421/ENResource/p35" alt=""></a><figcaption>3f3ad4ef57a5bad64a436b0a29a8a65a.png</figcaption></figure>
+<figure tabindex="5"><a href="../images/consensus_protocol/p5.png"><img src="../images/consensus_protocol/p5.png" alt=""></a><figcaption>p5</figcaption></figure>
 <p>如果一个Acceptor不接受它收到的第一个值，那值的确定就无从谈起。这个条件的引入产生了一个问题，如上图，一个系统中可能会存在多个Properer提出值，Acceptor接受第一个值后无法形成大多数，造成值无法确定，所以Acceptor除了接受第一个值之外，还需要能够接受后续的值，直到值被大多数Acceptor接受后确定下来为止。
 为了使Acceptor能够对值的多次接受进行标识，从而引入一个编号，编号和值合并称为提议，将编号称为提议号，需要被确定的值称为提议值，至此，提议就包含了提议号和提议值。如果一个提议被确定，那该提议包含的值就被确定了。提议号的生成由系统自行实现，但需要不同的提议具有不同的提议号，并按提出的先后进行递增，即提议号小的提议先被提出，提议号大的后被提出。由于Acceptor能够接受多个提议并且不受数量的限制，一旦一个提议被确定后，为了保证只有一个值被确定，需要对之后的提议进行约束。</p>
 <blockquote>
@@ -109,7 +109,7 @@
 <li>接受过的具有最高提议号的提议</li>
 </ul>
 <h4 id="2.5-paxos总结"><a href="#2.5-paxos%E6%80%BB%E7%BB%93">2.5 Paxos总结</a></h4>
-<figure tabindex="6"><a href="evernotecid://F69FFB73-5A4B-441D-90A3-E7FF421602A3/appyinxiangcom/31284421/ENResource/p38"><img src="evernotecid://F69FFB73-5A4B-441D-90A3-E7FF421602A3/appyinxiangcom/31284421/ENResource/p38" alt=""></a><figcaption>4c39a8c96f4d84a44a17502a668b9ac8.png</figcaption></figure>
+<figure tabindex="6"><a href="../images/consensus_protocol/p6.png"><img src="../images/consensus_protocol/p6.png" alt=""></a><figcaption>p6</figcaption></figure>
 <p>如上图所示，Paxos主要分为两个阶段：</p>
 <ul>
 <li>
@@ -125,7 +125,7 @@
 </ul>
 <h4 id="2.6-活锁"><a href="#2.6-%E6%B4%BB%E9%94%81">2.6 活锁</a></h4>
 <p>在上一小节的总结中，可以看到Paxos主要分成两个阶段来完成，Acceptor通过提议编号的大小确定是否接受提议，可能会存在一种场景，如下图所示：</p>
-<figure tabindex="7"><a href="evernotecid://F69FFB73-5A4B-441D-90A3-E7FF421602A3/appyinxiangcom/31284421/ENResource/p39"><img src="evernotecid://F69FFB73-5A4B-441D-90A3-E7FF421602A3/appyinxiangcom/31284421/ENResource/p39" alt=""></a><figcaption>e802a9c4cb8fcead41ae1cf1d8efc883.png</figcaption></figure>
+<figure tabindex="7"><a href="../images/consensus_protocol/p7.png"><img src="../images/consensus_protocol/p7.png" alt=""></a><figcaption>p7</figcaption></figure>
 <ol>
 <li>Proposer.1收到客户端的请求后发送编号为1的提议，preapare被1，2，3三个Acceptor接收；</li>
 <li>同时Proposer.3收到客户端的请求后发送编号为2的提议，也被1，2，3三个Acceptor接收；</li>
@@ -134,12 +134,12 @@
 <li>不断的重复以上的步骤，会导致系统中不能确定被接受的值；</li>
 </ol>
 <p>上诉的这种现象称为“活锁”；解决的办法可以在Proposer中选出一个leader，由leader进行所有提议的提交，如下图所示:</p>
-<figure tabindex="8"><a href="evernotecid://F69FFB73-5A4B-441D-90A3-E7FF421602A3/appyinxiangcom/31284421/ENResource/p41"><img src="evernotecid://F69FFB73-5A4B-441D-90A3-E7FF421602A3/appyinxiangcom/31284421/ENResource/p41" alt=""></a><figcaption>8aa43ce75e3b5931e0a4d36bc42f9a27.png</figcaption></figure>
+<figure tabindex="8"><a href="../images/consensus_protocol/p8.png"><img src="../images/consensus_protocol/p8.png" alt=""></a><figcaption>p8</figcaption></figure>
 <h2 id="3.multi-paxos"><a href="#3.multi-paxos">3.Multi-Paxos</a></h2>
 <p>通过以上的过程，Paxos可以确定出一个唯一的值，而往往在一个系统中我们需要不断的确定值，最简单的方式可以通过不断的运行Paxos来确定多个值，这个过程中，我们可以称运行一次Paxos为一个实例，一个实例能够确定一个值，如下图：</p>
-<figure tabindex="9"><a href="evernotecid://F69FFB73-5A4B-441D-90A3-E7FF421602A3/appyinxiangcom/31284421/ENResource/p46"><img src="evernotecid://F69FFB73-5A4B-441D-90A3-E7FF421602A3/appyinxiangcom/31284421/ENResource/p46" alt=""></a><figcaption>762e94afa476e53f3321e7e34d716f40.png</figcaption></figure>
+<figure tabindex="9"><a href="../images/consensus_protocol/p9.png"><img src="../images/consensus_protocol/p9.png" alt=""></a><figcaption>p9</figcaption></figure>
 <p>每个实例都需要运行Paxos的两个阶段，如下图是一个节点允许多个节点同时提交的运行情况：</p>
-<figure tabindex="10"><a href="evernotecid://F69FFB73-5A4B-441D-90A3-E7FF421602A3/appyinxiangcom/31284421/ENResource/p44"><img src="evernotecid://F69FFB73-5A4B-441D-90A3-E7FF421602A3/appyinxiangcom/31284421/ENResource/p44" alt=""></a><figcaption>5771ace945845267a4c1fba688816ef4.png</figcaption></figure>
+<figure tabindex="10"><a href="../images/consensus_protocol/p10.png"><img src="../images/consensus_protocol/p10.png" alt=""></a><figcaption>p10</figcaption></figure>
 <blockquote>
 <p>n.m : 其中n代表节点，m代表提议号，例如1.1位节点1提出的编号为1的提议；</p>
 </blockquote>
@@ -148,9 +148,9 @@
 <li>实例2中，节点2提出了编号为1的提议，由于节点1已经接收了来自节点2编号为3的提议，所以不会accept编号为1的提议；实例4同理，接收了来自节点3的更高的提议号而导致1.2被拒绝；</li>
 </ul>
 <p>如果只有一个节点提出提议，则流程如下：</p>
-<figure tabindex="11"><a href="evernotecid://F69FFB73-5A4B-441D-90A3-E7FF421602A3/appyinxiangcom/31284421/ENResource/p45"><img src="evernotecid://F69FFB73-5A4B-441D-90A3-E7FF421602A3/appyinxiangcom/31284421/ENResource/p45" alt=""></a><figcaption>36be3001632230da086d31295d87be29.png</figcaption></figure>
+<figure tabindex="11"><a href="../images/consensus_protocol/p11.png"><img src="../images/consensus_protocol/p11.png" alt=""></a><figcaption>p11</figcaption></figure>
 <p>由于只有一个节点提出提议，确认的流程就不会被打断，每次提议的编号都一致，只要对一个提议做出承诺后，之后的提议都不需要再承诺，从而省略Paxos的第一阶段，即将对提议编号的承诺扩展到多个实例：</p>
-<figure tabindex="12"><a href="evernotecid://F69FFB73-5A4B-441D-90A3-E7FF421602A3/appyinxiangcom/31284421/ENResource/p47"><img src="evernotecid://F69FFB73-5A4B-441D-90A3-E7FF421602A3/appyinxiangcom/31284421/ENResource/p47" alt=""></a><figcaption>48aa0d0f5f92ac7078f512574816dd1c.png</figcaption></figure>
+<figure tabindex="12"><a href="../images/consensus_protocol/p12.png"><img src="../images/consensus_protocol/p12.png" alt=""></a><figcaption>p12</figcaption></figure>
 <p>由此可以看见，Multi-Paxos是系统的某种特殊场景下表现出来的并加之优化的特性，无需使用leader，在多个节点进行提交的情况下回衰减为朴素的Paxos，为了能够提供更好的性能，可以加强这一特性，可以将请求都通过解决活锁的leader来进行提交；</p>
 <h2 id="参考列表"><a href="#%E5%8F%82%E8%80%83%E5%88%97%E8%A1%A8">参考列表</a></h2>
 <ul>
