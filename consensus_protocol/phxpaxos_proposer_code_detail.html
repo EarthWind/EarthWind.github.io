@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="shortcut icon" href="/dist/favicon.ico">
+    <link rel="apple-touch-icon" href="/dist/favicon.png">
+    <link rel="stylesheet" type="text/css" href="/dist/highlight.css">
+    <link rel="stylesheet" type="text/css" href="/dist/katex.min.css">
+    <link rel="stylesheet" type="text/css" href="/dist/gitalk.css">
+    <link rel="stylesheet" type="text/css" href="/dist/main.css">
+    <title>phxpaxos源码详解(1)-Proposer | EarthWind's Blog</title>
+  </head>
+  <body>
+    <div class="app">
+      <div class="title">
+        <h1> phxpaxos源码详解(1)-Proposer </h1>
+      </div>
+      <div class="info">
+        <div class="date"> 2021.03.24 </div>
+        <a href="https://github.com/EarthWind">
+          <div class="author"> EarthWind </div>
+        </a>
+      </div>
+      <div class="markdown">
+        <p>phxpaxos是腾讯微信团队基于Multi-Paxos算法实现的生产级、高性能一致性类库，本篇主要浏览Proposer的实现，主要源码路径为<code>src/algorithm/proposer.cpp</code>；</p>
+<p>Proposer在Multi-Paxos算法中主要是接收客户端请求，向Acceptors发送提议；</p>
+<h2 id="1.prepare阶段"><a href="#1.prepare%E9%98%B6%E6%AE%B5">1.prepare阶段</a></h2>
+<p>Proposer发起提议的入口为<code>NewValue</code>方法；</p>
+<pre class="language-markup"><code class="language-markup">int Proposer :: NewValue(const std::string &amp; sValue) 
+{
+    // a.完成对提议值的设置，将提议的情况包装在了m_oProposerState对象中；
+    if (m_oProposerState.GetValue().size() == 0)
+    {   
+        m_oProposerState.SetValue(sValue);
+    }   
+
+    // b.设置prepare和accept的超时时长
+    m_iLastPrepareTimeoutMs = START_PREPARE_TIMEOUTMS;
+    m_iLastAcceptTimeoutMs = START_ACCEPT_TIMEOUTMS;
+
+    // c.判断是否可以直接跳过prepare阶段；如果可以，则进入accept阶段，如果不可以，则进入prepare阶段；
+    if (m_bCanSkipPrepare &amp;&amp; !m_bWasRejectBySomeone)
+    {   
+        Accept();
+    }   
+    else
+    {   
+        // if not reject by someone, no need to increase ballot
+        Prepare(m_bWasRejectBySomeone);
+    }   
+    return 0;
+}
+</code></pre>
+<ul>
+<li>a.Proposer将提议的信息包装在了<code>m_oProposerState</code>对象中，并在开始提议时，先设置提议的值为Proposer自身的值，如果prepare阶段发现Acceptor已经存在接受的值，则会再次更改；如下，是<code>m_oProposerState</code>的结构：</li>
+</ul>
+<pre class="language-markup"><code class="language-markup">class ProposerState
+{
+public:
+    // 在phxpaxos中，提议编号由提议id和节点id共同组成，由BallotNumber进行包装，这里记录发起本次提议的提议id
+    uint64_t m_llProposalID;
+    // 如果该提议被决绝，则设置该字段，用于记录所有Acceptor返回的中最高提议id，再次发起提议时，会在该提议id的基础上进行自增；
+    uint64_t m_llHighestOtherProposalID;
+    // 提议值内容
+    std::string m_sValue;
+    // 记录所有Acceptor接受过的最高提议编号，包括了提议id和节点id信息
+    BallotNumber m_oHighestOtherPreAcceptBallot;
+}
+</code></pre>
+<ul>
+<li>b.proposer在进行prepare或则accept时，都不能进行无限期的等待，所以需要设置相应的超时机制，这里初始化了默认的超时时间，会按照是提议值的大小模式进行设定；</li>
+</ul>
+<pre class="language-markup"><code class="language-markup">const int InsideOptions :: GetStartPrepareTimeoutMs()
+{
+    if (m_bIsLargeBufferMode)                     
+    {
+        return 15000; // 15s
+    }     
+    else  
+    {     
+        return 2000; // 2s
+    }     
+}
+
+const int InsideOptions :: GetStartAcceptTimeoutMs()
+{
+    if (m_bIsLargeBufferMode)                     
+    { 
+        return 15000; // 15s
+    } 
+    else
+    { 
+        return 1000; // 2s
+    } 
+}
+</code></pre>
+<ul>
+<li>c.判断是否可以跳过prepare阶段，这是Multi-Paxos相对与Paxos的优化，使得提议过程的两次交互减少为一次交互；只要该节点已经得到了大部分Acceptor的承诺以及没有在提议的过程中被任何的Aceeptor拒绝过，便能直接进入accept阶段；</li>
+</ul>
+<p>按照初始提议流程，会进入prepare阶段：</p>
+<pre class="language-markup"><code class="language-markup">void Proposer :: Prepare(const bool bNeedNewBallot)
+{
+    // a.有可能时由于accept阶段超时导致的的重试，所以首先需要退出accep阶段，重置Proposer的状态为prepare阶段；
+    ExitAccept();
+    m_bIsPreparing = true;
+    m_bCanSkipPrepare = false;
+    m_bWasRejectBySomeone = false;
+
+    // b.重置ProposeState的状态；在提议被accept节点拒绝的情况下，会重新选择更高的提议id
+    m_oProposerState.ResetHighestOtherPreAcceptBallot();
+    if (bNeedNewBallot)
+    {
+        m_oProposerState.NewPrepare();
+    }
+
+    // c.填充prepare请求消息
+    PaxosMsg oPaxosMsg;
+    oPaxosMsg.set_msgtype(MsgType_PaxosPrepare);
+    oPaxosMsg.set_instanceid(GetInstanceID());
+    oPaxosMsg.set_nodeid(m_poConfig->GetMyNodeID());
+    oPaxosMsg.set_proposalid(m_oProposerState.GetProposalID());
+
+    // d.清空Proposer的计数信息
+    m_oMsgCounter.StartNewRound();
+
+    // e.添加计时器，然后将prepare请求广播给所有Acceptor节点；
+    AddPrepareTimer();
+    BroadcastMessage(oPaxosMsg);
+}
+</code></pre>
+<ul>
+<li>a.首先Proposer自身的状态重置为prepare，避免由于超时导致的状态紊乱；</li>
+<li>b.将之前接受到prepare返回给清空，如果是由于被Acceptor决绝而重新发起的提议，则需要调用<code>NewPrepare()</code>方法重置提议id;在该方法中，会根据Acceptor返回的情况选择提议id;</li>
+</ul>
+<pre class="language-markup"><code class="language-markup">void ProposerState :: NewPrepare()
+{
+    // 在已知的最高提议id上进行自增；
+    uint64_t llMaxProposalID =
+        m_llProposalID > m_llHighestOtherProposalID ? m_llProposalID : m_llHighestOtherProposalID;
+    m_llProposalID = llMaxProposalID + 1;
+}
+</code></pre>
+<ul>
+<li>c.将需要发送给Acceptor的消息进行完整的填充，phxpaxos内的消息都使用了protocol buffers进行序列化，通过tcp或则udp发送出去，prepare消息主要携带了消息类别，实例编号，发起提议的节点编号以及提议id；</li>
+<li>在消息发送之前将Proposer自身的计数器清空，用于统计此轮提议的情况，例如，有多少那些Acceptor接受，那些拒绝；</li>
+<li>添加prepare超时计时器，如果超时会重新发起prepre进行重试,如下代码所示，最后将消息广播给所有的Acceptor;</li>
+</ul>
+<pre class="language-markup"><code class="language-markup">void Proposer :: OnPrepareTimeout()
+{
+    // 限制只能在同一个实例内进行重试，如果不是相同的实例，则不进行提议的重试；需要注意的是一般情况下，如果实例id不一致，则代表过期实例已经的值已经确认了；
+    if (GetInstanceID() != m_llTimeoutInstanceID)
+    {
+        return;
+    }
+
+    // 重试提议，进入prepare阶段；
+    Prepare(m_bWasRejectBySomeone);
+}
+</code></pre>
+<h2 id="2.-prepare阶段返回"><a href="#2.-prepare%E9%98%B6%E6%AE%B5%E8%BF%94%E5%9B%9E">2. prepare阶段返回</a></h2>
+<p>Proposer广播prepare请求后，会等待Acceptor的返回进入accept阶段，或则无法形成大多数而发生超时，接下来看一下接受prepare返回的处理流程。</p>
+<pre class="language-markup"><code class="language-markup">void Proposer :: OnPrepareReply(const PaxosMsg &amp; oPaxosMsg)
+{
+    // a.判断Proposer的状态是否正确，一体提议id是否一致；
+    if (!m_bIsPreparing)
+    {
+        return;
+    }
+    if (oPaxosMsg.proposalid() != m_oProposerState.GetProposalID())
+    {
+        return;
+    }
+
+    // 统计Acceptor的返回状态；
+    m_oMsgCounter.AddReceive(oPaxosMsg.nodeid());
+    
+    if (oPaxosMsg.rejectbypromiseid() == 0)
+    {
+        // b.Acceptor接受提议
+        BallotNumber oBallot(oPaxosMsg.preacceptid(), oPaxosMsg.preacceptnodeid());
+        m_oMsgCounter.AddPromiseOrAccept(oPaxosMsg.nodeid());
+        m_oProposerState.AddPreAcceptValue(oBallot, oPaxosMsg.value());
+    }
+    else
+    {
+        // c.Acceptor决绝提议
+        m_oMsgCounter.AddReject(oPaxosMsg.nodeid());
+        m_bWasRejectBySomeone = true;
+        m_oProposerState.SetOtherProposalID(oPaxosMsg.rejectbypromiseid());
+    }
+
+    if (m_oMsgCounter.IsPassedOnThisRound())
+    {
+        // d.提议被大多数Acceptor接受
+        int iUseTimeMs = m_oTimeStat.Point();
+        BP->GetProposerBP()->PreparePass(iUseTimeMs);
+        PLGImp("[Pass] start accept, usetime %dms", iUseTimeMs);
+        m_bCanSkipPrepare = true;
+        Accept();
+    }
+    else if (m_oMsgCounter.IsRejectedOnThisRound()
+            || m_oMsgCounter.IsAllReceiveOnThisRound())
+    {
+        // e.提议被大多数Acceptor决绝或无法形成大多数接受
+        AddPrepareTimer(OtherUtils::FastRand() % 30 + 10);
+    }
+}
+</code></pre>
+<ul>
+<li>a.Proposer的提议过程是串行顺序的，一个提议完成后才会开始下一个提议；如果接收prepare请求的返回时状态不对，则代表Proposer流程已经发送了变化，不必处理该返回，另外也会判断提议id是否一致，对于不同的提议编号也会进行处理；</li>
+<li>b.如果Acceptor返回的消息不包含决绝信息，则在计数器中响应的增加接受的节点，接下来查看是否Acceptor存在已经接受的提议；</li>
+</ul>
+<pre class="language-markup"><code class="language-markup">void ProposerState :: AddPreAcceptValue(
+        const BallotNumber &amp; oOtherPreAcceptBallot,
+        const std::string &amp; sOtherPreAcceptValue)
+{
+    // 如果没有接受过的值，直接返回；
+    if (oOtherPreAcceptBallot.isnull())
+    {
+        return;
+    }
+
+    // 如果存在接受过的值，并且比之前接受的提议编号更高，则重置接受过的最高提议编号，并且将提议值修改为已接受的值；
+    if (oOtherPreAcceptBallot > m_oHighestOtherPreAcceptBallot)
+    {
+        m_oHighestOtherPreAcceptBallot = oOtherPreAcceptBallot;
+        m_sValue = sOtherPreAcceptValue;
+    }
+}
+</code></pre>
+<ul>
+<li>c.如果提议被Acceptor拒绝，则代表Acceptor已经对更高的提议id进行了承诺，将返回结果计入拒绝计数器中，并设置被拒绝的状态，记录Acceptor返回的提议id，用于再次发起提议时选择新的提议ID；</li>
+</ul>
+<pre class="language-markup"><code class="language-markup">void ProposerState :: SetOtherProposalID(const uint64_t llOtherProposalID)
+{
+    // 记录Proposer从Acceptor获得的最高的提议id，用于下一次发起提议时使用；
+    if (llOtherProposalID > m_llHighestOtherProposalID)
+    {
+        m_llHighestOtherProposalID = llOtherProposalID;
+    }
+}
+</code></pre>
+<ul>
+<li>d.查看计数器，如果提议已经被大多数Acceptor承诺，则进入accept流程；由于提议编号已经被大多数的Acceptor承诺过了，所以可以设置跳过prepare阶段的标志，在后续的提议只要不被Acceptor拒绝，都可以省略第一阶段直接进入accept阶段；</li>
+<li>e.如果被大多数Acceptor拒绝或则所有Acceptor的消息接收了，但是提议依然没有通过，则会在等待10-40ms后再次重试；</li>
+</ul>
+<h2 id="3.accept阶段"><a href="#3.accept%E9%98%B6%E6%AE%B5">3.accept阶段</a></h2>
+<p>提议被大多数Acceptor承诺后或则在可以跳过prepare阶段的情况下，会进入accept阶段；</p>
+<pre class="language-markup"><code class="language-markup">void Proposer :: Accept()
+{
+    // a.进入prepare阶段
+    ExitPrepare();
+    m_bIsAccepting = true;
+
+    // b.设置accept消息
+    PaxosMsg oPaxosMsg;
+    oPaxosMsg.set_msgtype(MsgType_PaxosAccept);
+    oPaxosMsg.set_instanceid(GetInstanceID());
+    oPaxosMsg.set_nodeid(m_poConfig->GetMyNodeID());
+    oPaxosMsg.set_proposalid(m_oProposerState.GetProposalID());
+    oPaxosMsg.set_value(m_oProposerState.GetValue());
+    oPaxosMsg.set_lastchecksum(GetLastChecksum());
+
+    // 重置计数器
+    m_oMsgCounter.StartNewRound();
+    
+    // c.发送消息
+    AddAcceptTimer()；
+    BroadcastMessage(oPaxosMsg, BroadcastMessage_Type_RunSelf_Final);
+}
+</code></pre>
+<ul>
+<li>a.进入accept状态后，后设置状态，并退出prepare状态；</li>
+<li>b.设置accept消息，主要包括了实例id，节点id，提议id提议值等主要信息，另外，为了保证paxos内各个节点的值得一致性，加入了校验信息，用于判断节点间是否出现了不一致的现象；</li>
+<li>c.设置accept超时计时器后将accept消息发送给所有的Acceptor节点；</li>
+</ul>
+<h2 id="4.-accept阶段返回"><a href="#4.-accept%E9%98%B6%E6%AE%B5%E8%BF%94%E5%9B%9E">4. accept阶段返回</a></h2>
+<p>proposer发送消息后，会等待Acceptor的返回消息，并进入<code>OnAcceptReply</code>方法进行处理；</p>
+<pre class="language-markup"><code class="language-markup">void Proposer :: OnAcceptReply(const PaxosMsg &amp; oPaxosMsg)
+{
+    // a.检查Proposer自身的状态
+    if (!m_bIsAccepting)
+    {
+        return;
+    }
+    if (oPaxosMsg.proposalid() != m_oProposerState.GetProposalID())
+    {
+        return;
+    }
+
+    // b.添加到计数器中
+    m_oMsgCounter.AddReceive(oPaxosMsg.nodeid());
+
+    if (oPaxosMsg.rejectbypromiseid() == 0)
+    {
+        // c.提议被Acceptor接受
+        m_oMsgCounter.AddPromiseOrAccept(oPaxosMsg.nodeid());
+    }
+    else
+    {
+        // d.提议被Acceptor拒绝
+        m_oMsgCounter.AddReject(oPaxosMsg.nodeid());
+        m_bWasRejectBySomeone = true;
+        m_oProposerState.SetOtherProposalID(oPaxosMsg.rejectbypromiseid());
+    }
+
+    if (m_oMsgCounter.IsPassedOnThisRound())
+    {
+        // e.提议被大多数Acceptor接受
+        ExitAccept();
+        m_poLearner->ProposerSendSuccess(GetInstanceID(), m_oProposerState.GetProposalID());
+    }
+    else if (m_oMsgCounter.IsRejectedOnThisRound()
+            || m_oMsgCounter.IsAllReceiveOnThisRound())
+    {
+        // f.提议未能形成大多数
+        AddAcceptTimer(OtherUtils::FastRand() % 30 + 10);
+    }
+}
+</code></pre>
+<ul>
+<li>a.如果Proposer收到Acceptor的accept消息返回，而自身却不是accept阶段，则会将消息忽略，说明Proposer的状态已经发生了改变，可能由于超时已经进行了重试；另外，对于提议id不一致的消息要需要忽略，避免处理了延迟的消息；</li>
+<li>b.更新计数器，用于进行判断提议是否被通过；</li>
+<li>c.如果提议被Acceptor接受，则将返回消息的Acceptor加入接受计数器中；</li>
+<li>d.如果提议被Acceptor决绝，则将返回消息的Acceptor加入决绝计数器中，记录Acceptor承诺的更高的提议id，设置Proposer被拒绝过，并在重试提议时选择更高的提议id;</li>
+<li>e.如果提议被大多数Acceptor接受，则代表该提议已经在该实例中确定了，退出accept阶段后将确定值广播给Learner进行学习；</li>
+</ul>
+<pre class="language-markup"><code class="language-markup">void Learner :: ProposerSendSuccess(
+        const uint64_t llLearnInstanceID,
+        const uint64_t llProposalID)
+{
+    // 填充学习的消息
+    PaxosMsg oPaxosMsg;
+    oPaxosMsg.set_msgtype(MsgType_PaxosLearner_ProposerSendSuccess);
+    oPaxosMsg.set_instanceid(llLearnInstanceID);
+    oPaxosMsg.set_nodeid(m_poConfig->GetMyNodeID());
+    oPaxosMsg.set_proposalid(llProposalID);
+    oPaxosMsg.set_lastchecksum(GetLastChecksum());
+
+    // 将消息广播给所有的Learner
+    BroadcastMessage(oPaxosMsg, BroadcastMessage_Type_RunSelf_First);
+}
+</code></pre>
+<ul>
+<li>f.如果提议被大多数节点决绝或则在接受完所有节点消息还未能形成大多数，则让提议等待10-40ms后进行重试，会根据此轮统计的信息进行下一轮的提议的重试；</li>
+</ul>
+<h2 id="5.总结"><a href="#5.%E6%80%BB%E7%BB%93">5.总结</a></h2>
+<p>phxpaxos中Proposer的流程和Multi-Paxos内对角色功能的描述一致，开始时进行prepare和accept两阶段，在得到大部分Acceptor的承诺后，会跳过prepare阶段从而让提议在一个RTT内完成，将提议编号推广到了整个提议流程中，提升了协议的效率。</p>
+<h2 id="6.参考源码"><a href="#6.%E5%8F%82%E8%80%83%E6%BA%90%E7%A0%81">6.参考源码</a></h2>
+<ul>
+<li><a href="https://github.com/Tencent/phxpaxos">phxpaxos github</a></li>
+<li><a href="https://ivanzz1001.github.io/records/post/paxos/2017/10/13/phxpaxos-source-arch">phxpaxos源代码整体架构</a></li>
+<li><a href="https://blog.csdn.net/weixin_41713182/article/details/88147487">PhxPaxos源码解析（1）之概述篇</a></li>
+<li><a href="https://blog.csdn.net/weixin_41713182/article/details/88213176">PhxPaxos源码分析之（2）提案申请篇</a></li>
+<li><a href="https://blog.csdn.net/weixin_41713182/article/details/88304530">PhxPaxos源码分析之（3）提案发起篇（Paxos协议核心）</a></li>
+<li><a href="https://blog.csdn.net/weixin_41713182/article/details/88355009">PhxPaxos源码分析之（4）Learner篇</a></li>
+<li><a href="https://www.jianshu.com/p/9f1a874a39e5">1. PhxPaxos源码分析之关于PhxPaxos</a></li>
+</ul>
+
+      </div>
+      <div id="gitalk-container">
+      </div>
+      <div class="footer">
+        <div class="license">
+          Except where otherwise noted, content on this site is licensed under a <a href="https://creativecommons.org/licenses/by-sa/4.0/">CC BY-SA 4.0</a> license.
+        </div>
+        <div class="copyright">
+          Copyright©2021 EarthWind, All Rights Reserved. Powered by <a href="https://pages.github.com/">GitHub Pages</a> and <a href="https://github.com/features/actions">GitHub Actions</a>.
+        </div>
+      </div>
+    </div>
+    <script src="/dist/gitalk.min.js"></script>
+    <script src="/dist/main.js"></script>
+    <script> (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){ (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o), m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m) })(window,document,'script','https://www.google-analytics.com/analytics.js','ga'); ga('create', 'UA-61723712-2', 'auto'); ga('send', 'pageview'); </script>
+  </body>
+</html>

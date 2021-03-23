@@ -1,5 +1,17 @@
 [
   {
+    "title": "phxpaxos源码详解(1)-Proposer",
+    "date": "2021.03.24",
+    "author": "EarthWind",
+    "tags": [
+      "phxpaxos",
+      "paxos",
+      "multi-paxos"
+    ],
+    "filename": "phxpaxos_proposer_code_detail",
+    "url_path": "/consensus_protocol/phxpaxos_proposer_code_detail.html"
+  },
+  {
     "title": "Paxos、Multi-Paxos详解",
     "date": "2021.03.20",
     "author": "EarthWind",
